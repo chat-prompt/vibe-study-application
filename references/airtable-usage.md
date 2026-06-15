@@ -55,7 +55,7 @@ const app: StudyApplication = {
   phone: "01012345678",
   email: "hong@example.com",
   bio: "• 지피터스 19기 스터디장\n• Claude Code 1년 경험",
-  category: "개발&자동화",
+  category: "개발&에이전트",
   tool: "Claude Code",
   difficulty: "입문",
   prereqVideo: "",

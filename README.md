@@ -1,8 +1,9 @@
 # Vibe Study Application
 
-> 바이브코딩 스터디 지원서 작성 도우미
+> 바이브코딩 스터디 지원서 작성 도우미 (2단계 지원 구조)
 
-스터디장이 AI와 대화하며 스터디 상세페이지를 자동으로 생성하는 Claude Code / OpenCode 스킬입니다.
+스터디장이 AI와 대화하며 스터디 상세 지원서를 완성하는 Claude Code / OpenCode 스킬입니다.
+**기본정보는 웹폼에서, 상세 지원서는 이 스킬에서** — 두 단계로 나뉩니다.
 
 ---
 
@@ -10,7 +11,7 @@
 
 ### 배경
 
-지피터스 커뮤니티에서 21기 스터디를 준비하면서 고민이 있었습니다.
+지피터스 커뮤니티에서 스터디를 준비하면서 고민이 있었습니다.
 
 기존 스터디들은 "ChatGPT 활용법", "Notion AI 써보기", "Make로 자동화하기" 같은 주제가 많았어요. 물론 좋은 주제들이지만, **진짜 AI 시대의 생산성**은 다른 곳에 있다고 생각했습니다.
 
@@ -18,21 +19,30 @@
 
 > "코드를 한 줄도 직접 쓰지 않고, 자연어로 결과물을 만드는 것"
 
-2025년, AI는 단순히 "도와주는 도구"를 넘어서 **직접 만들어주는 파트너**가 되었습니다.
+AI는 단순히 "도와주는 도구"를 넘어서 **직접 만들어주는 파트너**가 되었습니다.
 
 - **CLI 바이브코딩**: Cursor, Claude Code, OpenCode
-- **에이전트 기반**: OpenClaw, Lindy, Manus  
-- **노코드 AI**: Antigravity, Google Build
+- **에이전트 기반**: OpenClaw, Lindy, Manus
+- **노코드 AI**: AI 스튜디오 빌드, 코워크, NotebookLM
 
 ChatGPT에게 "이거 어떻게 해?"라고 묻는 것과, Claude Code에게 "이거 만들어줘"라고 말하는 것은 완전히 다른 경험입니다.
 
-### 주제 전환의 맥락
-
-- "GPT로 글쓰기" → "Antigravity에서 md 노트 모아 전자책 출판"
-- "Make로 자동화" → "Claude Code 스킬로 워크플로우 자동화"
-- "노코드로 MVP" → "Cursor로 실제 작동하는 앱 만들기"
-
 스터디장들이 기존에 기획한 주제를 **바이브코딩 관점으로 재해석**할 수 있도록, 이 스킬이 도와줍니다.
+
+---
+
+## 2단계 지원 구조 (2026-06 도입)
+
+스터디장 지원은 두 단계로 진행됩니다.
+
+| 단계 | 무엇을 | 어디서 |
+|------|--------|--------|
+| **1단계 — 기본정보** | 이름·연락처·이메일·공동스터디장·가능 요일·오프모임 참석·레벨·지원동기·AI토크 참석·개인정보 동의 | 스터디장 지원 **웹페이지의 폼** |
+| **2단계 — 상세 지원서** | 카테고리·바이브코딩 도구·주제·커리큘럼·상세페이지·Q&A·사전학습 | **이 스킬** (AI 대화) |
+
+폼을 제출하면 Airtable에 `작성중` 레코드가 생성됩니다. 이 스킬은 **전화번호로 그 레코드를 찾아** 상세내용을 채우고 `제출완료`로 승격시킵니다.
+
+> 폼을 거치지 않고 바로 스킬로 온 경우에도, 스킬이 기본정보까지 함께 받아 새 레코드를 생성하는 **폴백**이 동작합니다.
 
 ---
 
@@ -41,6 +51,7 @@ ChatGPT에게 "이거 어떻게 해?"라고 묻는 것과, Claude Code에게 "�
 ### 1. 준비물
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 또는 [OpenCode](https://github.com/opencode-ai/opencode) 설치
+- 1단계 웹폼에서 입력한 **전화번호** (2단계가 이 번호로 지원서를 찾습니다)
 - 스터디 주제 아이디어 (완벽하지 않아도 됩니다!)
 
 ### 2. 스킬 설치
@@ -49,22 +60,21 @@ ChatGPT에게 "이거 어떻게 해?"라고 묻는 것과, Claude Code에게 "�
 
 ```bash
 # Claude Code
-git clone https://github.com/daht-mad/vibe-study-application.git ~/.claude/skills/vibe-study-application
+git clone https://github.com/chat-prompt/vibe-study-application.git ~/.claude/skills/vibe-study-application
 
 # OpenCode
-git clone https://github.com/daht-mad/vibe-study-application.git ~/.opencode/skills/vibe-study-application
+git clone https://github.com/chat-prompt/vibe-study-application.git ~/.opencode/skills/vibe-study-application
 ```
+
+> 지피터스 운영진은 `bbopters-skill install vibe-study-application` 으로 공용 레포에서 바로 활성화할 수 있습니다.
 
 ### 3. 지원서 작성 시작
 
 아무 폴더에서나 Claude Code 또는 OpenCode를 실행하세요:
 
 ```bash
-# Claude Code
-claude
-
-# OpenCode  
-opencode
+claude      # Claude Code
+opencode    # OpenCode
 ```
 
 그리고 이렇게 말하세요:
@@ -81,19 +91,22 @@ opencode
 
 ### 4. 인터뷰 진행
 
+스킬이 먼저 **접수 기간**을 확인한 뒤, **전화번호로 1단계 폼 제출 내역을 찾습니다.** 이미 폼을 냈다면 기본정보(이름·연락처·레벨·요일 등)는 다시 묻지 않고, 상세내용만 대화로 채웁니다.
+
 AI가 자연스럽게 질문합니다:
 
 1. **주제 확인**: "어떤 스터디를 기획하고 계세요?"
-2. **카테고리 선택**: 개발&자동화 / 콘텐츠&지식 / 업무&비즈니스
+2. **카테고리 선택**: 개발&에이전트 / 콘텐츠&지식 / 업무&비즈니스
 3. **바이브코딩 도구 선택**: 주제에 맞는 도구 추천
-4. **난이도 선택**: 입문 vs 중급
-5. **상세 인터뷰**: 대상, 문제, 결과물, 커리큘럼
-6. **지원자 정보**: 성함, 연락처, 이력
+4. **난이도 확인**: 입문 🐥 / 중급 / 고급 (폼에서 고른 레벨 기준)
+   - 중급·고급은 **사전학습 영상 + 선수지식**이 필수입니다
+5. **상세 인터뷰**: 대상, 문제, 결과물, 주차별 커리큘럼
+6. **커리큘럼 명확성 검토**: 4주 연결성·결과물 누적·주차별 지식공유가 분명한지 함께 점검
 
-### 5. 상세페이지 자동 생성
+### 5. 상세페이지 자동 생성 + 제출
 
 인터뷰가 끝나면 AI가 상세페이지를 자동으로 생성합니다.
-확인 후 "제출"이라고 말하면 Airtable에 저장됩니다.
+확인 후 "제출"이라고 말하면 Airtable의 **기존 레코드가 업데이트**되고 `제출완료`로 승격됩니다.
 
 ---
 
@@ -101,12 +114,12 @@ AI가 자연스럽게 질문합니다:
 
 ```
 vibe-study-application/
-├── SKILL.md              # 메인 스킬 파일
+├── SKILL.md              # 메인 스킬 파일 (실제 워크플로우 정의)
 ├── scripts/
-│   └── airtable.ts       # Airtable API 스크립트
+│   └── airtable.ts       # Airtable API 스크립트 (조회·생성·상세채움·제출)
 └── references/
     ├── examples.md       # 바이브코딩 전환 예시
-    ├── template.md       # 상세페이지 템플릿
+    ├── template.md       # 상세페이지 템플릿 (주차별 = 지식공유 + 멤버 과제 + 결과물)
     └── airtable-usage.md # API 사용법
 ```
 
@@ -114,14 +127,15 @@ vibe-study-application/
 
 ## 일정 안내
 
-일정은 Airtable 기수관리 테이블에서 **동적으로 조회**됩니다. 기수가 바뀌어도 스킬 코드를 수정할 필요 없습니다.
+일정은 Airtable 기수관리 테이블에서 **동적으로 조회**됩니다. 기수가 바뀌어도 스킬 코드를 수정할 필요가 없습니다.
 
 ```bash
-bun run scripts/airtable.ts --check-deadline
+bun run scripts/airtable.ts --check-deadline   # 현재 접수 가능 여부
+bun run scripts/airtable.ts --list             # 현재 기수 제출 지원서 목록
 ```
 
-마감일까지 언제든 수정 가능 (전화번호로 조회)
-선발 후 "작성중" 상태로 게시판 업로드 → 한 번 더 수정 기회
+- 마감일까지 언제든 수정 가능 (전화번호로 조회 — 웹페이지 「내 지원 확인·수정」 탭 또는 스킬 재실행)
+- 선발 후 추가 수정 기회 제공
 
 ---
 

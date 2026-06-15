@@ -1,15 +1,27 @@
 #!/usr/bin/env bun
 
-const AIRTABLE_API_KEY = "patVBnYfJ6iOrQN08.e851189b98ca38b4ce1eb7c764ca08f04c830d97103cba88018c9e4944a3717b";
-const AIRTABLE_BASE_ID = "app8McJxchG5oZ9d8";
-const AIRTABLE_TABLE_ID = "tbl5tMLZDfzHbcmrO";
-const COHORT_TABLE_ID = "tblLs3KrhQHm1sxjQ";
+// 🔑 토큰은 환경변수에서만 읽는다 (레포에 평문 토큰 절대 남기지 않음).
+//   - OpenClaw 봇 환경: 워크스페이스 .env의 AIRTABLE_API_KEY
+//   - Vercel 폼(api/submit-application.ts): AIRTABLE_TOKEN
+//   둘 중 무엇이든 잡히도록 한다. 미설정 시 첫 호출에서 명확히 에러를 던진다.
+const AIRTABLE_API_KEY = process.env.AIRTABLE_TOKEN || process.env.AIRTABLE_API_KEY || "";
+const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID || "app8McJxchG5oZ9d8";
+const AIRTABLE_TABLE_ID = process.env.AIRTABLE_TABLE_ID || "tbl5tMLZDfzHbcmrO";
+const COHORT_TABLE_ID = process.env.AIRTABLE_COHORT_TABLE_ID || "tblLs3KrhQHm1sxjQ";
+
+if (!AIRTABLE_API_KEY) {
+  console.error(
+    "⚠️  AIRTABLE_TOKEN(또는 AIRTABLE_API_KEY) 환경변수가 없습니다.\n" +
+      "   워크스페이스 .env를 source하거나 AIRTABLE_TOKEN=... 으로 설정 후 실행하세요."
+  );
+}
 
 export interface StudyApplication {
   name: string;
   phone: string;
   email: string;
   bio: string;
+  motivation?: string;
   category: string;
   tool: string;
   difficulty: "입문" | "중급" | "고급";
@@ -81,13 +93,26 @@ function validateApplication(app: StudyApplication): void {
 
 export type ApplicationStatus = "작성중" | "제출완료";
 
+export interface CreateApplicationOptions {
+  /** 특정 기수 recordId로 강제 지정 (마감 지난 특례 제출 등). 지정 시 마감일 체크 건너뜀. */
+  cohortRecordId?: string;
+}
+
 export async function createApplication(
   app: StudyApplication,
-  status: ApplicationStatus = "제출완료"
+  status: ApplicationStatus = "제출완료",
+  options: CreateApplicationOptions = {}
 ): Promise<{ id: string; url: string }> {
-  const { allowed, cohort, message } = await checkApplicationDeadline();
-  if (!allowed) {
-    throw new Error(message);
+  let cohortRecordId: string | null = null;
+
+  if (options.cohortRecordId) {
+    cohortRecordId = options.cohortRecordId;
+  } else {
+    const { allowed, cohort, message } = await checkApplicationDeadline();
+    if (!allowed) {
+      throw new Error(message);
+    }
+    cohortRecordId = cohort?.recordId ?? null;
   }
 
   validateApplication(app);
@@ -97,6 +122,7 @@ export async function createApplication(
     "전화번호": app.phone,
     "이메일": app.email,
     "이력": app.bio,
+    ...(app.motivation ? { "지원동기": app.motivation } : {}),
     "카테고리": app.category,
     "바이브코딩 도구": app.tool,
     "난이도": app.difficulty === "입문" ? "입문 🐥" : app.difficulty,
@@ -107,9 +133,9 @@ export async function createApplication(
     "제출일시": new Date().toISOString(),
   };
 
-  // 현재 접수 중인 기수를 링크 필드로 연결
-  if (cohort) {
-    fields["기수"] = [cohort.recordId];
+  // 현재 접수 중인 기수를 링크 필드로 연결 ("기수"는 computed lookup, 실제 링크는 "기수관리")
+  if (cohortRecordId) {
+    fields["기수관리"] = [cohortRecordId];
   }
 
   if (app.difficulty === "중급" || app.difficulty === "고급") {
@@ -165,6 +191,7 @@ export async function updateApplication(
     phone: "전화번호",
     email: "이메일",
     bio: "이력",
+    motivation: "지원동기",
     category: "카테고리",
     tool: "바이브코딩 도구",
     difficulty: "난이도",
@@ -192,6 +219,8 @@ export async function updateApplication(
         fields[fieldName] = Array.isArray(value)
           ? value
           : (value as string).split(",").map((s: string) => s.trim());
+      } else if (key === "difficulty") {
+        fields[fieldName] = value === "입문" ? "입문 🐥" : value;
       } else {
         fields[fieldName] = value;
       }
@@ -202,6 +231,96 @@ export async function updateApplication(
     records: [{ id: recordId, fields }],
     typecast: true,
   });
+}
+
+/**
+ * 폼(1단계)으로 생성된 「작성중」 레코드에 상세내용(2단계)을 채우고 제출 상태로 승격한다.
+ * vibe-study-application 스킬의 핵심 진입점.
+ *
+ * @param recordId  폼 제출 시 생성된 레코드 ID (전화번호로 getApplicationByPhone 조회해서 얻음)
+ * @param detail    스킬 인터뷰로 수집한 상세내용
+ * @param status    "제출완료"(최종 제출) 또는 "작성중"(임시저장). 기본 "제출완료"
+ */
+export async function fillApplicationDetail(
+  recordId: string,
+  detail: {
+    category: string;
+    tool: string;
+    difficulty?: "입문" | "중급" | "고급";
+    prereqVideo?: string;
+    prereqKnowledge?: string;
+    generatedTitle: string;
+    generatedContent: string;
+    qaRaw: string;
+    aiTalkAvailability?: string;
+  },
+  status: ApplicationStatus = "제출완료"
+): Promise<void> {
+  // 중급/고급은 사전학습 필수 — 스킬 단계에서도 한 번 더 가드
+  if ((detail.difficulty === "중급" || detail.difficulty === "고급")) {
+    if (!detail.prereqVideo?.trim() || !detail.prereqKnowledge?.trim()) {
+      throw new Error(`${detail.difficulty} 난이도는 사전학습 영상과 선수지식이 필수입니다.`);
+    }
+  }
+  await updateApplication(recordId, { ...detail, status });
+}
+
+// ─────────────────────────────────────────────────────────────
+// API 경유 제출 (외부 스터디장 환경 — 토큰 없이 안전하게 제출)
+// ─────────────────────────────────────────────────────────────
+
+/** 스터디장 지원 페이지의 서버리스 API 베이스 URL (env로 오버라이드 가능) */
+const SUBMIT_API_BASE =
+  process.env.STUDY_APPLY_API_BASE || "https://aistudy-leader.gpters.org";
+
+export interface DetailSubmitInput {
+  phone: string;
+  category: string;
+  tool: string;
+  difficulty?: "입문" | "중급" | "고급";
+  prereqVideo?: string;
+  prereqKnowledge?: string;
+  generatedTitle: string;
+  generatedContent: string;
+  qaRaw: string;
+  aiTalkAvailability?: string;
+  bio?: string;
+  motivation?: string;
+}
+
+/**
+ * 상세내용을 Vercel API(/api/update-application)를 통해 제출한다.
+ *
+ * 🔑 이 경로는 토큰이 전혀 필요 없다. 스터디장 PC의 스킬은 전화번호 + 상세내용만 보내고,
+ *    실제 Airtable 쓰기는 서버(Vercel)가 자기 토큰으로 대신 한다.
+ *    → 외부 환경에 우리 Airtable 토큰을 노출하지 않는 안전한 기본 경로.
+ *
+ * 전화번호로 1단계 폼 제출 레코드(「작성중」)를 찾아 채우고 상태를 갱신한다.
+ *
+ * @returns 서버 응답 { ok, recordId, status, message } 또는 실패 시 throw
+ */
+export async function submitDetailViaApi(
+  input: DetailSubmitInput,
+  status: ApplicationStatus = "제출완료"
+): Promise<{ ok: boolean; recordId?: string; status?: string; message?: string }> {
+  if (input.difficulty === "중급" || input.difficulty === "고급") {
+    if (!input.prereqVideo?.trim() || !input.prereqKnowledge?.trim()) {
+      throw new Error(`${input.difficulty} 난이도는 사전학습 영상과 선수지식이 필수입니다.`);
+    }
+  }
+
+  const res = await fetch(`${SUBMIT_API_BASE}/api/update-application`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...input, status }),
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok) {
+    // 폼 미제출(404 notFound)은 호출부에서 분기할 수 있게 메시지를 그대로 전달
+    throw new Error(data.error || `API 제출 실패 (HTTP ${res.status})`);
+  }
+  return data;
 }
 
 export async function getApplicationByPhone(phone: string): Promise<AirtableRecord | null> {
@@ -217,11 +336,13 @@ export async function getApplicationByPhone(phone: string): Promise<AirtableReco
   }
 
   // 현재 기수 지원서만 필터
+  // ⚠️ 「기수」는 숫자 lookup([23]), 「기수관리」가 실제 링크 recordId — 매칭은 후자로.
+  //    (createApplication은 「기수관리」에 쓰는데 여기선 「기수」로 읽으면 영원히 불일치 → 폼 제출자 못 찾음)
   const currentCohortRecord = result.records.find((r) => {
-    const gisu = r.fields["기수"];
-    if (!gisu) return false;
-    const gisuIds = Array.isArray(gisu) ? gisu : [gisu];
-    return gisuIds.includes(cohort.recordId);
+    const link = r.fields["기수관리"];
+    if (!link) return false;
+    const linkIds = Array.isArray(link) ? link : [link];
+    return linkIds.includes(cohort.recordId);
   });
 
   return currentCohortRecord || null;
@@ -240,11 +361,11 @@ export async function getSubmittedApplications(): Promise<{ title: string; categ
 
   return result.records
     .filter((r) => {
-      const gisu = r.fields["기수"];
-      if (!gisu) return false;
-      // 링크 필드는 레코드 ID 배열로 올 수 있음
-      const gisuIds = Array.isArray(gisu) ? gisu : [gisu];
-      return gisuIds.includes(cohort.recordId);
+      // ⚠️ 「기수」는 숫자 lookup([23]), 「기수관리」가 실제 링크 recordId — 매칭은 후자로.
+      const link = r.fields["기수관리"];
+      if (!link) return false;
+      const linkIds = Array.isArray(link) ? link : [link];
+      return linkIds.includes(cohort.recordId);
     })
     .map((r) => ({
       title: r.fields["생성된 제목"] || "(제목 없음)",
@@ -304,8 +425,9 @@ export async function getCurrentGisu(): Promise<GisuSchedule | null> {
   for (const record of records) {
     const f = record.fields;
     if (!f["스터디장지원마감일"]) continue;
+    if (!f["스터디장지원시작일"]) continue;
     const deadline = new Date(f["스터디장지원마감일"]);
-    const start = f["스터디장지원시작일"] ? new Date(f["스터디장지원시작일"]) : new Date(0);
+    const start = new Date(f["스터디장지원시작일"]);
     if (start <= now && now <= deadline) {
       return { ...f, recordId: record.id } as GisuSchedule;
     }
@@ -508,7 +630,7 @@ export async function testCreateApplication(): Promise<void> {
     phone: "010-1234-5678",
     email: "test@example.com",
     bio: "• 지피터스 19기 스터디장\n• Claude Code 1년 경험",
-    category: "개발&자동화",
+    category: "개발&에이전트",
     tool: "Claude Code",
     difficulty: "입문",
     generatedTitle: "비개발자를 위한 Claude Code로 자동화 스킬 만들기",
