@@ -9,12 +9,9 @@ const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID || "app8McJxchG5oZ9d8";
 const AIRTABLE_TABLE_ID = process.env.AIRTABLE_TABLE_ID || "tbl5tMLZDfzHbcmrO";
 const COHORT_TABLE_ID = process.env.AIRTABLE_COHORT_TABLE_ID || "tblLs3KrhQHm1sxjQ";
 
-if (!AIRTABLE_API_KEY) {
-  console.error(
-    "⚠️  AIRTABLE_TOKEN(또는 AIRTABLE_API_KEY) 환경변수가 없습니다.\n" +
-      "   워크스페이스 .env를 source하거나 AIRTABLE_TOKEN=... 으로 설정 후 실행하세요."
-  );
-}
+// 토큰은 Airtable 직접 호출(airtableRequest) 시에만 필요하다.
+// API 경유 경로(submitDetailViaApi, checkDeadlineViaApi)는 토큰이 전혀 없어도 동작하므로,
+// 파일 로드 시점엔 경고하지 않는다 — 토큰 없는 외부 스터디장의 정상 흐름을 방해하지 않기 위함.
 
 export interface StudyApplication {
   name: string;
@@ -56,6 +53,12 @@ async function airtableRequest(
   body?: Record<string, any>,
   tableId: string = AIRTABLE_TABLE_ID
 ): Promise<any> {
+  if (!AIRTABLE_API_KEY) {
+    throw new Error(
+      "이 작업은 Airtable 토큰이 필요합니다(운영진 전용). 외부 스터디장은 토큰 없이 동작하는 " +
+        "API 경유 경로(submitDetailViaApi / checkDeadlineViaApi)를 사용하세요."
+    );
+  }
   const url = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${tableId}${path}`;
 
   const options: RequestInit = {
@@ -273,6 +276,44 @@ export async function fillApplicationDetail(
 const SUBMIT_API_BASE =
   process.env.STUDY_APPLY_API_BASE || "https://aistudy-leader.gpters.org";
 
+export interface CohortStatusInfo {
+  recordId: string;
+  name: string;
+  number: number | null;
+  deadline: string | null;
+  selectionDate: string | null;
+  startDate: string | null;
+}
+
+/**
+ * 마감일/기수 접수 상태를 Vercel API(/api/cohort-status)로 확인한다.
+ *
+ * 🔑 토큰이 전혀 필요 없다. 서버(Vercel)가 자기 토큰으로 기수를 조회해
+ *    접수 가능 여부 + 공개 일정(기수명·마감일)만 돌려준다. 지원서 데이터는 노출 0.
+ *    → 외부 스터디장(토큰 없음) 환경에서도 마감일 게이트를 통과할 수 있다.
+ *
+ * @returns { allowed, cohort, message }. checkApplicationDeadline와 형태 호환.
+ */
+export async function checkDeadlineViaApi(): Promise<{
+  allowed: boolean;
+  cohort: CohortStatusInfo | null;
+  message: string;
+}> {
+  const res = await fetch(`${SUBMIT_API_BASE}/api/cohort-status`, {
+    method: "GET",
+    headers: { "Content-Type": "application/json" },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok) {
+    throw new Error(data.error || `기수 상태 조회 실패 (HTTP ${res.status})`);
+  }
+  return {
+    allowed: !!data.allowed,
+    cohort: data.cohort ?? null,
+    message: data.message || "",
+  };
+}
+
 export interface DetailSubmitInput {
   phone: string;
   category: string;
@@ -324,6 +365,9 @@ export async function submitDetailViaApi(
 }
 
 export async function getApplicationByPhone(phone: string): Promise<AirtableRecord | null> {
+  // 🔑 토큰 없는 외부 환경 → 사전 조회는 건너뛰고 null 반환 (에러 X).
+  //    실제 레코드 매칭은 제출 시 Vercel API(submitDetailViaApi)가 서버에서 수행한다.
+  if (!AIRTABLE_API_KEY) return null;
   const cohort = await getActiveCohort();
   const formula = encodeURIComponent(`{전화번호} = "${phone}"`);
   const result: AirtableResponse = await airtableRequest(
@@ -348,8 +392,9 @@ export async function getApplicationByPhone(phone: string): Promise<AirtableReco
   return currentCohortRecord || null;
 }
 
-/** 현재 기수의 제출완료 지원서 목록을 가져온다 */
+/** 현재 기수의 제출완료 지원서 목록을 가져온다 (운영진 토큰 환경 전용 — 다른 지원자 정보라 외부엔 미노출) */
 export async function getSubmittedApplications(): Promise<{ title: string; category: string; difficulty: string; tool: string }[]> {
+  if (!AIRTABLE_API_KEY) return []; // 토큰 없는 외부 환경 → 빈 목록 (에러 X)
   const cohort = await getActiveCohort();
   if (!cohort) return [];
 
@@ -408,6 +453,39 @@ export interface GisuSchedule {
 }
 
 async function fetchCohortRecords(): Promise<AirtableRecord[]> {
+  // 🔑 토큰 없는 외부 환경 → Vercel API(/api/cohort-status)로 폴백.
+  //    서버가 기수를 조회해 접수 가능 기수를 돌려주므로, 토큰 함수 전체가 토큰 없이도 동작한다.
+  //    (외부 스터디장이 어떤 함수를 부르든 토큰 에러를 만나지 않게 하는 안전장치)
+  if (!AIRTABLE_API_KEY) {
+    try {
+      const res = await fetch(`${SUBMIT_API_BASE}/api/cohort-status`, {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+      });
+      const data = await res.json().catch(() => ({}));
+      const c = data.cohort || data.next; // 접수중이면 cohort, 마감이면 다음 기수
+      if (!c) return [];
+      // CohortStatusInfo → AirtableRecord 형태로 변환 (상위 함수가 그대로 소비)
+      return [
+        {
+          id: c.recordId || "",
+          createdTime: "",
+          fields: {
+            기수명: c.name,
+            기수: c.number,
+            스터디장지원마감일: c.deadline,
+            스터디장선발회신일: c.selectionDate,
+            스터디시작일: c.startDate,
+            // 지원시작일은 API가 안 주지만, cohort-status가 "접수중"으로 판정해 cohort를 준 것이므로
+            // getCurrentGisu의 start<=now 체크를 통과시키기 위해 과거로 설정.
+            스터디장지원시작일: data.cohort ? "1970-01-01" : c.startDate,
+          },
+        },
+      ];
+    } catch {
+      return [];
+    }
+  }
   const result: AirtableResponse = await airtableRequest(
     "GET",
     "",
@@ -653,8 +731,24 @@ export async function testCreateApplication(): Promise<void> {
 if (import.meta.main) {
   const args = process.argv.slice(2);
 
-  if (args.includes("--check-deadline")) {
+  if (args.includes("--check-deadline-token")) {
+    // 운영진용 — Airtable 직접 조회 (토큰 필요)
     checkDeadline();
+  } else if (args.includes("--check-deadline")) {
+    // 기본 — Vercel API 경유 (토큰 불필요, 외부 스터디장도 통과 가능)
+    try {
+      const r = await checkDeadlineViaApi();
+      console.log(r.message);
+      if (r.allowed && r.cohort) {
+        console.log(`  📅 기수: ${r.cohort.name}`);
+        console.log(`  📅 마감: ${r.cohort.deadline}`);
+        if (r.cohort.selectionDate) console.log(`  📅 선발회신: ${r.cohort.selectionDate}`);
+      }
+    } catch (e) {
+      console.error(`⚠️  기수 상태 조회 실패: ${e instanceof Error ? e.message : e}`);
+      console.error("   (네트워크 문제이거나 서버 점검 중일 수 있어요. 운영진이면 --check-deadline-token 사용)");
+      process.exit(1);
+    }
   } else if (args.includes("--list")) {
     const apps = await getSubmittedApplications();
     if (apps.length === 0) {
@@ -671,7 +765,8 @@ if (import.meta.main) {
     testCreateApplication();
   } else {
     console.log("사용법:");
-    console.log("  bun run airtable.ts --check-deadline  # 접수 가능 여부 확인");
+    console.log("  bun run airtable.ts --check-deadline        # 접수 가능 여부 (API 경유, 토큰 불필요)");
+    console.log("  bun run airtable.ts --check-deadline-token  # 접수 가능 여부 (Airtable 직접, 운영진·토큰 필요)");
     console.log("  bun run airtable.ts --list            # 현재 기수 제출 지원서 목록");
     console.log("  bun run airtable.ts --test            # 연결 테스트");
     console.log("  bun run airtable.ts --create-test     # 지원서 생성 테스트");

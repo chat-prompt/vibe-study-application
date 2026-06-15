@@ -37,6 +37,10 @@ description: |
 bun run <이 스킬의 scripts 경로>/airtable.ts --check-deadline
 ```
 
+> 🔑 **이 명령은 토큰이 필요 없다.** Vercel API(`/api/cohort-status`)를 통해 서버가 기수 상태를 확인해 돌려준다 — 외부 스터디장(토큰 없는 환경)도 그대로 통과한다.
+> 운영진이 Airtable을 직접 확인하고 싶으면 `--check-deadline-token`(토큰 필요)을 쓴다.
+> 만약 이 명령이 네트워크/서버 문제로 실패하면, 사용자에게 "잠시 후 다시 시도해주세요"라고 안내하고 인터뷰를 시작하지 않는다.
+
 ## Step 2: 결과에 따라 분기
 
 ### IF "❌ 접수 마감" → 즉시 종료 (인터뷰 시작 금지)
@@ -470,6 +474,10 @@ bun run <이 스킬의 scripts 경로>/airtable.ts --list
 - **폼 미제출 폴백 (운영진 토큰 환경)** → 기존대로 `createApplication(app, status)`.
 
 #### 6-4. 저장 완료 후 안내
+
+> 🔑 **토큰 유무와 무관하게 안전하다.** `getCurrentGisu`/`getScheduleMessage`는 토큰이 없으면 자동으로
+> Vercel API로 폴백하므로, 외부 스터디장 환경에서도 토큰 에러 없이 동작한다. (간단히는 Step 1 게이트에서
+> 받은 기수명·마감일을 그대로 써도 된다.)
 
 `getCurrentGisu()` + `getScheduleMessage()`로 현재 기수의 일정을 동적으로 표시:
 
